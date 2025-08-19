@@ -1,103 +1,263 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+
+interface ScanConfig {
+  config: {
+    sast: {
+      filter: any;
+    };
+  };
+}
+
+interface FormData {
+  bearerToken: string;
+  checkmarxProject: string;
+  checkmarxScan1: string;
+  checkmarxScan2: string;
+  checkmarxBaseUrl: string;
+}
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [formData, setFormData] = useState<FormData>({
+    bearerToken: '',
+    checkmarxProject: '',
+    checkmarxScan1: '',
+    checkmarxScan2: '',
+    checkmarxBaseUrl: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<{
+    scan1Config: any;
+    scan2Config: any;
+    differences: string[];
+  } | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const fetchScanConfig = async (scanId: string): Promise<ScanConfig> => {
+    const response = await fetch(`${formData.checkmarxBaseUrl}/api/scans/${scanId}/configuration`, {
+      headers: {
+        'Authorization': `Bearer ${formData.bearerToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scan ${scanId}: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  };
+
+  const compareFilters = (filter1: any, filter2: any): string[] => {
+    const differences: string[] = [];
+    
+    const compareObjects = (obj1: any, obj2: any, path: string = '') => {
+      const keys1 = Object.keys(obj1 || {});
+      const keys2 = Object.keys(obj2 || {});
+      const allKeys = new Set([...keys1, ...keys2]);
+
+      for (const key of allKeys) {
+        const currentPath = path ? `${path}.${key}` : key;
+        const val1 = obj1?.[key];
+        const val2 = obj2?.[key];
+
+        if (val1 === undefined && val2 !== undefined) {
+          differences.push(`${currentPath}: Missing in Scan 1, present in Scan 2 (${JSON.stringify(val2)})`);
+        } else if (val1 !== undefined && val2 === undefined) {
+          differences.push(`${currentPath}: Present in Scan 1 (${JSON.stringify(val1)}), missing in Scan 2`);
+        } else if (typeof val1 === 'object' && typeof val2 === 'object' && val1 !== null && val2 !== null) {
+          compareObjects(val1, val2, currentPath);
+        } else if (JSON.stringify(val1) !== JSON.stringify(val2)) {
+          differences.push(`${currentPath}: Scan 1 = ${JSON.stringify(val1)}, Scan 2 = ${JSON.stringify(val2)}`);
+        }
+      }
+    };
+
+    compareObjects(filter1, filter2);
+    return differences;
+  };
+
+  const handleAnalyze = async () => {
+    if (!formData.bearerToken || !formData.checkmarxProject || !formData.checkmarxScan1 || !formData.checkmarxScan2 || !formData.checkmarxBaseUrl) {
+      setError('Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setResults(null);
+
+    try {
+      const [scan1Config, scan2Config] = await Promise.all([
+        fetchScanConfig(formData.checkmarxScan1),
+        fetchScanConfig(formData.checkmarxScan2)
+      ]);
+
+      const differences = compareFilters(
+        scan1Config.config.sast.filter,
+        scan2Config.config.sast.filter
+      );
+
+      setResults({
+        scan1Config: scan1Config.config.sast.filter,
+        scan2Config: scan2Config.config.sast.filter,
+        differences
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred while fetching scan configurations');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen p-8 bg-gray-50 dark:bg-gray-900">
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-3xl font-bold text-center mb-8 text-gray-900 dark:text-white">
+          Checkmarx Scan Configuration Diff Tool
+        </h1>
+
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div>
+              <label htmlFor="checkmarxBaseUrl" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Checkmarx Base URL
+              </label>
+              <input
+                type="text"
+                id="checkmarxBaseUrl"
+                name="checkmarxBaseUrl"
+                value={formData.checkmarxBaseUrl}
+                onChange={handleInputChange}
+                placeholder="https://your-checkmarx-instance.com"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div>
+              <label htmlFor="bearerToken" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Bearer Token
+              </label>
+              <input
+                type="password"
+                id="bearerToken"
+                name="bearerToken"
+                value={formData.bearerToken}
+                onChange={handleInputChange}
+                placeholder="Enter your bearer token"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div>
+              <label htmlFor="checkmarxProject" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Checkmarx Project
+              </label>
+              <input
+                type="text"
+                id="checkmarxProject"
+                name="checkmarxProject"
+                value={formData.checkmarxProject}
+                onChange={handleInputChange}
+                placeholder="Project ID or name"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div>
+              <label htmlFor="checkmarxScan1" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Checkmarx Scan 1 ID
+              </label>
+              <input
+                type="text"
+                id="checkmarxScan1"
+                name="checkmarxScan1"
+                value={formData.checkmarxScan1}
+                onChange={handleInputChange}
+                placeholder="First scan ID"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div className="md:col-span-1">
+              <label htmlFor="checkmarxScan2" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Checkmarx Scan 2 ID
+              </label>
+              <input
+                type="text"
+                id="checkmarxScan2"
+                name="checkmarxScan2"
+                value={formData.checkmarxScan2}
+                onChange={handleInputChange}
+                placeholder="Second scan ID"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={handleAnalyze}
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+            {loading ? 'Analyzing...' : 'Analyze'}
+          </button>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
+            <strong>Error:</strong> {error}
+          </div>
+        )}
+
+        {results && (
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">
+                Configuration Differences
+              </h2>
+              {results.differences.length === 0 ? (
+                <p className="text-green-600 dark:text-green-400">
+                  No differences found between the SAST filter configurations.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {results.differences.map((diff, index) => (
+                    <li key={index} className="text-sm bg-yellow-50 dark:bg-yellow-900/20 p-3 rounded border-l-4 border-yellow-400">
+                      {diff}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+                <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+                  Scan 1 SAST Filter Configuration
+                </h3>
+                <pre className="bg-gray-100 dark:bg-gray-700 p-4 rounded text-sm overflow-auto max-h-96">
+                  {JSON.stringify(results.scan1Config, null, 2)}
+                </pre>
+              </div>
+
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+                <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+                  Scan 2 SAST Filter Configuration
+                </h3>
+                <pre className="bg-gray-100 dark:bg-gray-700 p-4 rounded text-sm overflow-auto max-h-96">
+                  {JSON.stringify(results.scan2Config, null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
