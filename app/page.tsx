@@ -43,15 +43,21 @@ export default function Home() {
   };
 
   const fetchScanConfig = async (scanId: string): Promise<ScanConfig> => {
-    const response = await fetch(`${formData.checkmarxBaseUrl}/api/scans/${scanId}/configuration`, {
+    const response = await fetch('/api/checkmarx', {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${formData.bearerToken}`,
         'Content-Type': 'application/json'
-      }
+      },
+      body: JSON.stringify({
+        bearerToken: formData.bearerToken,
+        checkmarxBaseUrl: formData.checkmarxBaseUrl,
+        scanId: scanId
+      })
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch scan ${scanId}: ${response.status} ${response.statusText}`);
+      const errorData = await response.json();
+      throw new Error(errorData.error || `Failed to fetch scan ${scanId}: ${response.status} ${response.statusText}`);
     }
 
     return response.json();
